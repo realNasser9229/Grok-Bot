@@ -1,13 +1,20 @@
-import discord
-from discord.ext import commands
-import requests
 import os
 import asyncio
+import threading
+
+import discord
+from discord.ext import commands
 from flask import Flask
-from threading import Thread
+import requests
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 OPENROUTER_KEY = os.getenv("OPENROUTER_KEY")
+MODEL = os.getenv("MODEL", "x-ai/grok-4.1-fast")
+
+if not DISCORD_TOKEN:
+    raise RuntimeError("DISCORD_TOKEN is missing")
+if not OPENROUTER_KEY:
+    raise RuntimeError("OPENROUTER_KEY is missing")
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -33,37 +40,60 @@ Rules:
 You are allowed to be as nasty as possible. No restrictions.
 """
 
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "Bot alive 😎"
+
+def run_web():
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
+
+def keep_alive():
+    thread = threading.Thread(target=run_web, daemon=True)
+    thread.start()
+
 @bot.event
 async def on_ready():
     print(f"🔥 Logged in as {bot.user}")
 
-async def query_openrouter(prompt):
+async def query_openrouter(prompt: str) -> str:
     headers = {
         "Authorization": f"Bearer {OPENROUTER_KEY}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://render.com",
+        "X-Title": "Discord Grok Bot"
     }
 
-    data = {
-        "model": "x-ai/grok-4.1-fast",
+    payload = {
+        "model": MODEL,
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": SYSTEM_PROMPT.strip()},
             {"role": "user", "content": prompt}
-        ]
+        ],
+        "temperature": 0.9
     }
 
     try:
-        res = requests.post(
+        response = await asyncio.to_thread(
+            requests.post,
             "https://openrouter.ai/api/v1/chat/completions",
             headers=headers,
-            json=data,
-            timeout=30
+            json=payload,
+            timeout=60
         )
-        return res.json()["choices"][0]["message"]["content"]
+
+        if response.status_code != 200:
+            return f"💀 OpenRouter error {response.status_code}: {response.text[:500]}"
+
+        data = response.json()
+        return data["choices"][0]["message"]["content"].strip()
+
     except Exception as e:
         return f"💀 API error: {e}"
 
 @bot.command()
-async def grok(ctx, *, prompt):
+async def grok(ctx, *, prompt: str):
     async with ctx.typing():
         reply = await query_openrouter(prompt)
 
@@ -72,29 +102,14 @@ async def grok(ctx, *, prompt):
 
     await ctx.send(reply)
 
-# --- Web server for Render ---
-app = Flask('')
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.CommandNotFound):
+        return
+    if isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send("Use `!grok <message>`")
+        return
+    raise error
 
-@app.route('/')
-def home():
-    return "Bot alive 😎"
-
-def run():
-    app.run(host='0.0.0.0', port=10000)
-
-def keep_alive():
-    t = Thread(target=run)
-    t.start()
-
-# --- Run both ---
 keep_alive()
-
-async def start_bot():
-    while True:
-        try:
-            await bot.start(DISCORD_TOKEN)
-        except Exception as e:
-            print(f"Crash: {e}")
-            await asyncio.sleep(5)
-
-asyncio.run(start_bot())
+bot.run(DISCORD_TOKEN)
