@@ -3,6 +3,8 @@ from discord.ext import commands
 import requests
 import os
 import asyncio
+from flask import Flask
+from threading import Thread
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 OPENROUTER_KEY = os.getenv("OPENROUTER_KEY")
@@ -42,7 +44,7 @@ async def query_openrouter(prompt):
     }
 
     data = {
-        "model": "x-ai/grok-1",  # adjust if needed
+        "model": "x-ai/grok-1",
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": prompt}
@@ -50,39 +52,49 @@ async def query_openrouter(prompt):
     }
 
     try:
-        response = requests.post(
+        res = requests.post(
             "https://openrouter.ai/api/v1/chat/completions",
             headers=headers,
             json=data,
             timeout=30
         )
-
-        res_json = response.json()
-
-        return res_json["choices"][0]["message"]["content"]
-
+        return res.json()["choices"][0]["message"]["content"]
     except Exception as e:
-        return f"💀 Something broke: {e}"
+        return f"💀 API error: {e}"
 
 @bot.command()
 async def grok(ctx, *, prompt):
     async with ctx.typing():
         reply = await query_openrouter(prompt)
 
-    # Discord message limit safety
     if len(reply) > 2000:
         reply = reply[:1990] + "..."
 
     await ctx.send(reply)
 
-# Optional: auto-reconnect loop protection
+# --- Web server for Render ---
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Bot alive 😎"
+
+def run():
+    app.run(host='0.0.0.0', port=10000)
+
+def keep_alive():
+    t = Thread(target=run)
+    t.start()
+
+# --- Run both ---
+keep_alive()
+
 async def start_bot():
     while True:
         try:
             await bot.start(DISCORD_TOKEN)
         except Exception as e:
-            print(f"⚠️ Bot crashed: {e}")
-            print("🔁 Restarting in 5 seconds...")
+            print(f"Crash: {e}")
             await asyncio.sleep(5)
 
 asyncio.run(start_bot())
