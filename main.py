@@ -44,7 +44,7 @@ async def query_openrouter(prompt):
     }
 
     data = {
-        "model": "x-ai/grok-1",
+        "model": "x-ai/grok-4.1-fast",
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": prompt}
